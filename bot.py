@@ -1,5 +1,3 @@
-[file name]: bot (3).py
-[file content begin]
 import telebot
 from telebot import types
 import os
