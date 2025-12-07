@@ -760,6 +760,26 @@ def handle_callback(call):
                 disable_web_page_preview=True,
                 reply_markup=item_keyboard(item_id)
             )
+# ========== HTTP СЕРВЕР ДЛЯ RENDER ==========
+from flask import Flask
+import threading
+
+def start_http_server():
+    """Запускает простой HTTP сервер для Render"""
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def home():
+        return "🎬 КиноБот работает! Telegram: @ваш_бот"
+    
+    @app.route('/health')
+    def health():
+        return "OK", 200
+    
+    # Запускаем в отдельном потоке на порту 10000
+    import os
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 # ========== ЗАПУСК БОТА ==========
 if __name__ == '__main__':
