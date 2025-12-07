@@ -35,7 +35,7 @@ def home():
     """
 
 @app.route('/health')
-def health():
+def health_check():  # Изменили имя функции!
     return "OK", 200
 
 @app.route('/ping')
@@ -852,50 +852,55 @@ def handle_callback(call):
                 reply_markup=item_keyboard(item_id)
             )
 
-# ========== ЗАПУСК БОТА (Только polling) ==========
+# ========== ЗАПУСК БОТА ==========
 def run_bot():
+    """Запускает Telegram бота"""
     print("=" * 50)
-    print("🎬 КиноБот запускается...")
+    print("🤖 Telegram бот запускается...")
     print("=" * 50)
     
-    print(f"\n🔧 Проверка окружения:")
-    print(f"   TELEGRAM_TOKEN: {'✅ Установлен' if TOKEN else '❌ НЕ установлен'}")
-    print(f"   DATABASE_URL: {'✅ Установлен' if DATABASE_URL else '❌ НЕ установлен'}")
-    
+    # Инициализируем БД
     if not init_db():
         print("❌ Не удалось инициализировать базу данных")
+        return
     
-    print("\n🤖 Бот запускается...")
-    
-    # Сбрасываем вебхук если был
+    # Удаляем старый вебхук если был
     try:
         bot.remove_webhook()
         time.sleep(0.5)
+        print("✅ Старый вебхук удален")
     except:
         pass
     
-    # Запускаем polling
-    while True:
-        try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
-        except Exception as e:
-            print(f"🔴 Ошибка: {e}")
-            print("🔄 Перезапуск через 10 секунд...")
-            time.sleep(10)
+    # Запускаем polling с пропуском старых сообщений
+    print("🔄 Запуск polling...")
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
+    except Exception as e:
+        print(f"🔴 Ошибка polling: {e}")
+        print("🔄 Перезапуск через 10 секунд...")
+        time.sleep(10)
+        run_bot()  # Рекурсивный перезапуск
+
+def start_flask():
+    """Запускает Flask сервер"""
+    port = int(os.environ.get('PORT', 10000))
+    print(f"🌐 Flask сервер запускается на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 if __name__ == '__main__':
-    # Если нужен health check, создаем минимальный Flask только для /health
-    @app.route('/health')
-    def health():
-        return "OK", 200
+    # Проверка токена
+    if not TOKEN:
+        print("❌❌❌ ОШИБКА: TELEGRAM_TOKEN не установлен!")
+        print("❌❌❌ Установите переменную окружения TELEGRAM_TOKEN на Render")
+        exit(1)
+    
+    print("🎬 КиноБот запускается...")
+    print(f"🔑 Токен: {'✅ Установлен' if TOKEN else '❌ НЕТ'}")
+    print(f"🗄️  База данных: {'✅ Supabase' if DATABASE_URL else '❌ SQLite (локальная)'}")
     
     # Запускаем Flask в отдельном потоке
-    def start_minimal_flask():
-        port = int(os.environ.get('PORT', 10000))
-        print(f"🌐 Health check сервер запущен на порту {port}")
-        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
-    
-    flask_thread = threading.Thread(target=start_minimal_flask, daemon=True)
+    flask_thread = threading.Thread(target=start_flask, daemon=True)
     flask_thread.start()
     
     # Даем Flask время на запуск
