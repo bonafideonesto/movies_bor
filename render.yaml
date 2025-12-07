@@ -11,5 +11,7 @@ services:
         sync: false  
       - key: KINOPOISK_API_KEY
         sync: false
-      - key: DATABASE_URL  # ← ДОБАВЬТЕ ЭТО
+      - key: DATABASE_URL
         sync: false
+    healthCheckPath: /health
+    autoDeploy: true
