@@ -7,12 +7,13 @@ services:
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
-        value: ваш_настоящий_токен_от_botfather  # ЗАМЕНИТЕ НА СВОЙ!
       - key: OMDB_API_KEY
         sync: false  
       - key: KINOPOISK_API_KEY
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: RENDER_EXTERNAL_URL  # Добавьте эту переменную!
+        generateValue: true
     healthCheckPath: /health
     autoDeploy: true
