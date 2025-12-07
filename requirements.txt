@@ -1,5 +1,6 @@
-pyTelegramBotAPI==4.19.1
+telebot==0.0.5
+Flask==3.0.0
 requests==2.31.0
 deep-translator==1.11.4
-Flask==3.0.0
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.9  # Конкретная версия, совместимая с Python 3.13
+python-dotenv==1.0.0
