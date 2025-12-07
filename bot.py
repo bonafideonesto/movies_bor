@@ -852,7 +852,7 @@ def handle_callback(call):
                 reply_markup=item_keyboard(item_id)
             )
 
-# ========== ЗАПУСК БОТА ==========
+# ========== ЗАПУСК БОТА (Только polling) ==========
 def run_bot():
     print("=" * 50)
     print("🎬 КиноБот запускается...")
@@ -867,31 +867,39 @@ def run_bot():
     
     print("\n🤖 Бот запускается...")
     
-    # Бесконечный цикл с перезапуском
+    # Сбрасываем вебхук если был
+    try:
+        bot.remove_webhook()
+        time.sleep(0.5)
+    except:
+        pass
+    
+    # Запускаем polling
     while True:
         try:
-            bot.polling(none_stop=True, timeout=60, skip_pending=True)
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
         except Exception as e:
             print(f"🔴 Ошибка: {e}")
-            import traceback
-            traceback.print_exc()
-            print("🔄 Перезапуск через 5 секунд...")
-            time.sleep(5)
-            continue
-
-def start_flask_server():
-    """Запускает Flask сервер"""
-    port = int(os.environ.get('PORT', 10000))
-    print(f"🌐 HTTP сервер запущен на порту {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+            print("🔄 Перезапуск через 10 секунд...")
+            time.sleep(10)
 
 if __name__ == '__main__':
+    # Если нужен health check, создаем минимальный Flask только для /health
+    @app.route('/health')
+    def health():
+        return "OK", 200
+    
     # Запускаем Flask в отдельном потоке
-    flask_thread = threading.Thread(target=start_flask_server, daemon=True)
+    def start_minimal_flask():
+        port = int(os.environ.get('PORT', 10000))
+        print(f"🌐 Health check сервер запущен на порту {port}")
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
+    
+    flask_thread = threading.Thread(target=start_minimal_flask, daemon=True)
     flask_thread.start()
     
-    # Даем Flask немного времени на запуск
-    time.sleep(2)
+    # Даем Flask время на запуск
+    time.sleep(3)
     
     # Запускаем бота
     run_bot()
