@@ -881,12 +881,42 @@ def run_bot():
     print("🎬 КиноБот запущен!")
     print("=" * 50)
     
+    # Проверка окружения
+    print("\n🔧 Проверка окружения...")
+    print(f"DATABASE_URL: {'✅' if DATABASE_URL else '❌ НЕТ'}")
+    print(f"TELEGRAM_TOKEN: {'✅' if TOKEN != '8572008688:AAFxlCebMUSKOhzsspjJXtr1vLoP3JUsvDU' else '❌ НЕТ или дефолтный'}")
+    
+    # Инициализация БД
     init_db()
+    
+    # Проверка соединения и таблиц
+    print("\n🔗 Проверка БД...")
+    try:
+        conn = get_connection()
+        if conn:
+            import sqlite3
+            if isinstance(conn, sqlite3.Connection):
+                print("   Тип: SQLite")
+            else:
+                print("   Тип: PostgreSQL")
+            
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT COUNT(*) FROM items")
+                count = cur.fetchone()[0]
+                print(f"   Записей в таблице: {count}")
+            except:
+                print("   Таблица items пуста или не создана")
+            
+            conn.close()
+    except Exception as e:
+        print(f"   ⚠️ Ошибка проверки БД: {e}")
+    
+    print("\n🟢 Бот запускается...")
     
     # Бесконечный цикл с перезапуском
     while True:
         try:
-            print("🟢 Бот запускается...")
             bot.polling(none_stop=True, timeout=60, skip_pending=True, restart_on_change=True)
         except Exception as e:
             print(f"🔴 Ошибка: {e}")
