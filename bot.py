@@ -764,4 +764,18 @@ def handle_callback(call):
 # ========== ЗАПУСК БОТА ==========
 if __name__ == '__main__':
     print("=" * 50)
-    print("🎬 КиноБот запу
+    print("🎬 КиноБот запущен!")
+    print("=" * 50)
+    
+    init_db()
+    
+    # Бесконечный цикл с перезапуском
+    while True:
+        try:
+            print("🟢 Бот запускается...")
+            bot.polling(none_stop=True, timeout=60, skip_pending=True)
+        except Exception as e:
+            print(f"🔴 Ошибка: {e}")
+            print("🔄 Перезапуск через 5 секунд...")
+            time.sleep(5)
+            continue
