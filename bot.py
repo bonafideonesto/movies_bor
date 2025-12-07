@@ -42,17 +42,18 @@ def health():
 def ping():
     return "pong", 200
 
-def start_flask():
-    """Запускает Flask сервер"""
-    port = int(os.environ.get('PORT', 10000))
-    print(f"🌐 HTTP сервер запущен на порту {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-
 # ========== КОНФИГУРАЦИЯ ==========
-TOKEN = os.getenv('TELEGRAM_TOKEN', "8572008688:AAFxlCebMUSKOhzsspjJXtr1vLoP3JUsvDU")
+TOKEN = os.getenv('TELEGRAM_TOKEN')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY', "7717512b")
 KINOPOISK_API_KEY = os.getenv('KINOPOISK_API_KEY', "ZS97X1F-7M144TE-Q24BJS9-BAWFJDE")
 DATABASE_URL = os.getenv('DATABASE_URL')
+
+# Проверка токена
+if not TOKEN:
+    print("❌❌❌ ВНИМАНИЕ: TELEGRAM_TOKEN не установлен!")
+    print("❌❌❌ Установите переменную окружения TELEGRAM_TOKEN на Render")
+    # Без токена бот не запустится
+    exit(1)
 
 bot = telebot.TeleBot(TOKEN, skip_pending=True)
 
@@ -65,7 +66,6 @@ def get_connection():
         return sqlite3.connect('movies.db', check_same_thread=False)
     
     print(f"🔗 Подключаемся к PostgreSQL...")
-    print(f"   URL: {DATABASE_URL[:50]}...")
     
     try:
         import psycopg2
@@ -103,15 +103,14 @@ def init_db():
     """Создает таблицы"""
     conn = get_connection()
     if not conn:
-        return
+        print("❌ Не удалось подключиться к БД")
+        return False
     
     cur = conn.cursor()
     
     try:
         # Определяем тип базы данных
         is_sqlite = isinstance(conn, sqlite3.Connection)
-        
-        print(f"📊 Используем {'SQLite' if is_sqlite else 'PostgreSQL'}")
         
         if is_sqlite:
             # SQLite версия
@@ -152,10 +151,12 @@ def init_db():
         
         conn.commit()
         print("✅ База данных инициализирована")
+        return True
     except Exception as e:
         print(f"❌ Ошибка БД: {e}")
         import traceback
         traceback.print_exc()
+        return False
     finally:
         conn.close()
 
@@ -173,8 +174,6 @@ def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating
         # Проверяем тип соединения
         is_sqlite = isinstance(conn, sqlite3.Connection)
         
-        print(f"📊 Используем {'SQLite' if is_sqlite else 'PostgreSQL'}")
-        
         if is_sqlite:
             # SQLite
             cur.execute('''
@@ -187,7 +186,6 @@ def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating
             result = cur.fetchone()
         else:
             # PostgreSQL для Supabase
-            print(f"📤 SQL запрос для PostgreSQL")
             cur.execute('''
                 INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -202,7 +200,7 @@ def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating
             print(f"✅ Успешно добавлено с ID: {item_id}")
             return item_id
         else:
-            print("⚠️ Элемент не добавлен или уже существует")
+            print("⚠️ Элемент не добавлен")
             return None
             
     except Exception as e:
@@ -215,8 +213,6 @@ def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating
 
 def get_items(item_type):
     """Получает все фильмы/сериалы"""
-    print(f"🔍 Запрос элементов типа: {item_type}")
-    
     conn = get_connection()
     if not conn:
         print("❌ Нет подключения к БД")
@@ -237,17 +233,9 @@ def get_items(item_type):
                 FROM items WHERE type = %s ORDER BY title
             ''', (item_type,))
         
-        results = cur.fetchall()
-        print(f"📊 Найдено записей: {len(results)}")
-        
-        for row in results:
-            print(f"   - ID: {row[0]}, Title: {row[1]}, Year: {row[3]}, Watched: {row[8]}")
-        
-        return results
+        return cur.fetchall()
     except Exception as e:
         print(f"❌ Ошибка при получении данных: {e}")
-        import traceback
-        traceback.print_exc()
         return []
     finally:
         conn.close()
@@ -303,9 +291,7 @@ def update_item(item_id, **kwargs):
             cur.execute(f"UPDATE items SET {set_clause} WHERE id = %s", values)
         
         conn.commit()
-        updated = cur.rowcount > 0
-        print(f"📝 Обновлено записей: {cur.rowcount}")
-        return updated
+        return cur.rowcount > 0
     except Exception as e:
         print(f"❌ Ошибка при обновлении: {e}")
         return False
@@ -328,9 +314,7 @@ def delete_item(item_id):
             cur.execute("DELETE FROM items WHERE id = %s", (item_id,))
         
         conn.commit()
-        deleted = cur.rowcount > 0
-        print(f"🗑 Удалено записей: {cur.rowcount}")
-        return deleted
+        return cur.rowcount > 0
     except Exception as e:
         print(f"❌ Ошибка при удалении: {e}")
         return False
@@ -564,7 +548,6 @@ def start(message):
 
 @bot.message_handler(func=lambda message: message.text == '🎬 Список сериалов')
 def show_series(message):
-    print(f"📺 Запрос списка сериалов от {message.chat.id}")
     items = get_items('series')
     if not items:
         text = "📭 Список сериалов пуст.\n\nДобавьте первый сериал через меню '➕ Добавить фильм или сериал'"
@@ -572,14 +555,13 @@ def show_series(message):
     else:
         bot.send_message(
             message.chat.id,
-            f"📺 *Ваш список сериалов:*\n\nНайдено сериалов: {len(items)}\n\nВыберите сериал для детального просмотра:",
+            "📺 *Ваш список сериалов:*\n\nВыберите сериал для детального просмотра:",
             parse_mode='Markdown',
             reply_markup=list_keyboard(items, "series")
         )
 
 @bot.message_handler(func=lambda message: message.text == '🎥 Список фильмов')
 def show_movies(message):
-    print(f"🎬 Запрос списка фильмов от {message.chat.id}")
     items = get_items('movie')
     if not items:
         text = "📭 Список фильмов пуст.\n\nДобавьте первый фильм через меню '➕ Добавить фильм или сериал'"
@@ -587,19 +569,17 @@ def show_movies(message):
     else:
         bot.send_message(
             message.chat.id,
-            f"🎞 *Ваш список фильмов:*\n\nНайдено фильмов: {len(items)}\n\nВыберите фильм для детального просмотра:",
+            "🎞 *Ваш список фильмов:*\n\nВыберите фильм для детального просмотра:",
             parse_mode='Markdown',
             reply_markup=list_keyboard(items, "movie")
         )
 
 @bot.message_handler(func=lambda message: message.text == '📊 Статистика')
 def show_stats(message):
-    print(f"📊 Запрос статистики от {message.chat.id}")
     bot.send_message(message.chat.id, format_stats(), parse_mode='Markdown')
 
 @bot.message_handler(func=lambda message: message.text == '➕ Добавить фильм или сериал')
 def add_item_start(message):
-    print(f"➕ Начало добавления от {message.chat.id}")
     bot.send_message(message.chat.id, "🎬 *Что вы хотите добавить?*\n\nВы можете ввести название на русском или английском языке.", 
                      parse_mode='Markdown', reply_markup=type_keyboard())
     user_states[message.chat.id] = {'state': 'choosing_type'}
@@ -632,13 +612,12 @@ def enter_title(message):
     title = message.text.strip()
     item_type = user_states[chat_id]['type']
     
-    print(f"🎬 Пользователь ввел название: '{title}' (тип: {item_type})")
-    
     if not title:
         bot.send_message(chat_id, "❌ Название не может быть пустым. Попробуйте еще раз:", 
                        reply_markup=type_keyboard())
         return
     
+    # Проверяем, существует ли уже такой фильм
     existing_items = get_items(item_type)
     for item in existing_items:
         if item[1].lower() == title.lower():
@@ -652,8 +631,6 @@ def enter_title(message):
     
     bot.send_message(chat_id, f"🔍 *Ищу информацию о '{title}'...*", parse_mode='Markdown')
     result = search_film(title, item_type)
-    
-    print(f"🔍 Результат поиска: {result}")
     
     item_id = add_item(
         item_type=item_type,
@@ -878,46 +855,22 @@ def handle_callback(call):
 # ========== ЗАПУСК БОТА ==========
 def run_bot():
     print("=" * 50)
-    print("🎬 КиноБот запущен!")
+    print("🎬 КиноБот запускается...")
     print("=" * 50)
     
-    # Проверка окружения
-    print("\n🔧 Проверка окружения...")
-    print(f"DATABASE_URL: {'✅' if DATABASE_URL else '❌ НЕТ'}")
-    print(f"TELEGRAM_TOKEN: {'✅' if TOKEN != '8572008688:AAFxlCebMUSKOhzsspjJXtr1vLoP3JUsvDU' else '❌ НЕТ или дефолтный'}")
+    print(f"\n🔧 Проверка окружения:")
+    print(f"   TELEGRAM_TOKEN: {'✅ Установлен' if TOKEN else '❌ НЕ установлен'}")
+    print(f"   DATABASE_URL: {'✅ Установлен' if DATABASE_URL else '❌ НЕ установлен'}")
     
-    # Инициализация БД
-    init_db()
+    if not init_db():
+        print("❌ Не удалось инициализировать базу данных")
     
-    # Проверка соединения и таблиц
-    print("\n🔗 Проверка БД...")
-    try:
-        conn = get_connection()
-        if conn:
-            import sqlite3
-            if isinstance(conn, sqlite3.Connection):
-                print("   Тип: SQLite")
-            else:
-                print("   Тип: PostgreSQL")
-            
-            cur = conn.cursor()
-            try:
-                cur.execute("SELECT COUNT(*) FROM items")
-                count = cur.fetchone()[0]
-                print(f"   Записей в таблице: {count}")
-            except:
-                print("   Таблица items пуста или не создана")
-            
-            conn.close()
-    except Exception as e:
-        print(f"   ⚠️ Ошибка проверки БД: {e}")
-    
-    print("\n🟢 Бот запускается...")
+    print("\n🤖 Бот запускается...")
     
     # Бесконечный цикл с перезапуском
     while True:
         try:
-            bot.polling(none_stop=True, timeout=60, skip_pending=True, restart_on_change=True)
+            bot.polling(none_stop=True, timeout=60, skip_pending=True)
         except Exception as e:
             print(f"🔴 Ошибка: {e}")
             import traceback
@@ -926,10 +879,19 @@ def run_bot():
             time.sleep(5)
             continue
 
+def start_flask_server():
+    """Запускает Flask сервер"""
+    port = int(os.environ.get('PORT', 10000))
+    print(f"🌐 HTTP сервер запущен на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
 if __name__ == '__main__':
     # Запускаем Flask в отдельном потоке
-    flask_thread = threading.Thread(target=start_flask, daemon=True)
+    flask_thread = threading.Thread(target=start_flask_server, daemon=True)
     flask_thread.start()
     
-    # Запускаем бота в основном потоке
+    # Даем Flask немного времени на запуск
+    time.sleep(2)
+    
+    # Запускаем бота
     run_bot()
