@@ -19,6 +19,9 @@ KINOPOISK_API_KEY = os.getenv('KINOPOISK_API_KEY', "ZS97X1F-7M144TE-Q24BJS9-BAWF
 DATABASE_URL = os.getenv('DATABASE_URL')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Полный URL вебхука
 
+# Глобальная переменная для SQLite соединения
+sqlite_conn = None
+
 # Проверка токена
 if not TOKEN:
     print("❌❌❌ ВНИМАНИЕ: TELEGRAM_TOKEN не установлен!")
@@ -26,6 +29,8 @@ if not TOKEN:
     exit(1)
 
 bot = telebot.TeleBot(TOKEN)
+
+
 
 # ========== ВЕБХУК РУТЫ ==========
 @app.route('/')
@@ -87,12 +92,18 @@ def webhook():
 # ========== БАЗА ДАННЫХ ==========
 def get_connection():
     """Создает подключение к БД"""
+    global sqlite_conn
+    
     # Всегда используем PostgreSQL/Supabase
     if not DATABASE_URL or DATABASE_URL == '':
-        print("❌❌❌ ОШИБКА: DATABASE_URL не установлен!")
-        print("❌❌❌ Установите переменную окружения DATABASE_URL на Render")
-        # Вместо падения, создаем пустую in-memory SQLite
-        return sqlite3.connect(':memory:', check_same_thread=False)
+        print("⚠️ DATABASE_URL не установлен, используем SQLite in-memory")
+        
+        # Используем одно соединение для SQLite
+        if sqlite_conn is None:
+            sqlite_conn = sqlite3.connect(':memory:', check_same_thread=False)
+            print("✅ Создано новое SQLite соединение")
+        
+        return sqlite_conn
     
     print(f"🔗 Подключаемся к PostgreSQL...")
     
@@ -119,7 +130,12 @@ def get_connection():
         print(f"❌ Ошибка подключения к PostgreSQL: {e}")
         # В режиме разработки используем SQLite в памяти
         print("⚠️ Используем in-memory SQLite")
-        return sqlite3.connect(':memory:', check_same_thread=False)
+        
+        if sqlite_conn is None:
+            sqlite_conn = sqlite3.connect(':memory:', check_same_thread=False)
+            print("✅ Создано новое SQLite соединение")
+        
+        return sqlite_conn
 
 def init_db():
     """Создает таблицы"""
@@ -184,7 +200,9 @@ def init_db():
         traceback.print_exc()
         return False
     finally:
-        conn.close()
+        # НЕ закрываем соединение для SQLite!
+        if not isinstance(conn, sqlite3.Connection):
+            conn.close()
 
 def add_item(item_type, title, original_title, year, genre=None, kp_rating=None, imdb_rating=None, kp_url=None, imdb_url=None):
     """Добавляет фильм/сериал"""
@@ -232,7 +250,9 @@ def add_item(item_type, title, original_title, year, genre=None, kp_rating=None,
         traceback.print_exc()
         return None
     finally:
-        conn.close()
+        # Закрываем только для PostgreSQL
+        if not isinstance(conn, sqlite3.Connection):
+            conn.close()
 
 def get_items(item_type):
     """Получает все фильмы/сериалы"""
@@ -261,7 +281,9 @@ def get_items(item_type):
         print(f"❌ Ошибка при получении данных: {e}")
         return []
     finally:
-        conn.close()
+        # Закрываем только для PostgreSQL
+        if not isinstance(conn, sqlite3.Connection):
+            conn.close()
 
 def search_items(search_term, search_type=None, limit=50):
     """Ищет фильмы/сериалы по названию"""
