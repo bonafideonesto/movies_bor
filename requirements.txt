@@ -1,5 +1,7 @@
 pyTelegramBotAPI==4.19.1
 requests==2.31.0
 deep-translator==1.11.4
+Flask==3.0.0
 psycopg2-binary==2.9.9
-Flask==3.0.0  # ← ДОБАВЬТЕ ЭТУ СТРОЧКУ
+watchdog==3.0.0  # ← ДОБАВЬТЕ
+psutil==5.9.8     # ← ДОБАВЬТЕ
