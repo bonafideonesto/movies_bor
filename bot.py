@@ -12,6 +12,22 @@ import sqlite3
 # ========== HTTP СЕРВЕР ДЛЯ RENDER ==========
 app = Flask(__name__)
 
+# ========== КОНФИГУРАЦИЯ ==========
+TOKEN = os.getenv('TELEGRAM_TOKEN')
+OMDB_API_KEY = os.getenv('OMDB_API_KEY', "7717512b")
+KINOPOISK_API_KEY = os.getenv('KINOPOISK_API_KEY', "ZS97X1F-7M144TE-Q24BJS9-BAWFJDE")
+DATABASE_URL = os.getenv('DATABASE_URL')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Полный URL вебхука
+
+# Проверка токена
+if not TOKEN:
+    print("❌❌❌ ВНИМАНИЕ: TELEGRAM_TOKEN не установлен!")
+    print("❌❌❌ Установите переменную окружения TELEGRAM_TOKEN на Render")
+    exit(1)
+
+bot = telebot.TeleBot(TOKEN)
+
+# ========== ВЕБХУК РУТЫ ==========
 @app.route('/')
 def home():
     return """
@@ -30,6 +46,7 @@ def home():
         <h1>🎬 КиноБот работает!</h1>
         <p class="status">✅ Бот активен и готов к работе</p>
         <p>Добавляйте фильмы и сериалы через Telegram</p>
+        <p><a href="/health">Проверить статус</a></p>
     </body>
     </html>
     """
@@ -42,23 +59,32 @@ def health_check():
 def ping():
     return "pong", 200
 
-# ========== КОНФИГУРАЦИЯ ==========
-TOKEN = os.getenv('TELEGRAM_TOKEN')
-OMDB_API_KEY = os.getenv('OMDB_API_KEY', "7717512b")
-KINOPOISK_API_KEY = os.getenv('KINOPOISK_API_KEY', "ZS97X1F-7M144TE-Q24BJS9-BAWFJDE")
-DATABASE_URL = os.getenv('DATABASE_URL')
+@app.route('/set_webhook', methods=['GET'])
+def set_webhook():
+    if not WEBHOOK_URL:
+        return "❌ WEBHOOK_URL не установлен", 500
+    
+    try:
+        bot.remove_webhook()
+        time.sleep(0.5)
+        
+        # Устанавливаем вебхук
+        bot.set_webhook(url=WEBHOOK_URL)
+        return f"✅ Вебхук установлен: {WEBHOOK_URL}", 200
+    except Exception as e:
+        return f"❌ Ошибка установки вебхука: {e}", 500
 
-# Проверка токена
-if not TOKEN:
-    print("❌❌❌ ВНИМАНИЕ: TELEGRAM_TOKEN не установлен!")
-    print("❌❌❌ Установите переменную окружения TELEGRAM_TOKEN на Render")
-    exit(1)
-
-bot = telebot.TeleBot(TOKEN, skip_pending=True)
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        return 'Invalid content type', 403
 
 # ========== БАЗА ДАННЫХ ==========
-# Измените get_connection() для принудительного использования PostgreSQL:
-
 def get_connection():
     """Создает подключение к БД"""
     # Всегда используем PostgreSQL/Supabase
@@ -97,6 +123,7 @@ def get_connection():
 
 def init_db():
     """Создает таблицы"""
+    print("🔄 Инициализация базы данных...")
     conn = get_connection()
     if not conn:
         print("❌ Не удалось подключиться к БД")
@@ -126,6 +153,7 @@ def init_db():
                     added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            print("✅ Таблица items создана (SQLite)")
         else:
             # PostgreSQL версия с полем жанра
             cur.execute('''
@@ -145,6 +173,7 @@ def init_db():
                     added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            print("✅ Таблица items создана (PostgreSQL)")
         
         conn.commit()
         print("✅ База данных инициализирована")
@@ -554,7 +583,9 @@ def search_results_keyboard(search_results):
     markup = types.InlineKeyboardMarkup(row_width=2)
     for item in search_results:
         item_id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment = item
-        type_icon = "🎬" if item[0] == 'series' else "🎥"
+        # Определяем тип элемента
+        item_details = get_item_by_id(item_id)
+        type_icon = "🎬" if item_details and item_details[1] == 'series' else "🎥"
         watched_icon = "✅" if watched else "👁"
         btn_text = f"{type_icon}{watched_icon} {title}"
         if year and year != 'Неизвестно':
@@ -625,7 +656,8 @@ def format_search_results(search_results, search_term, search_type=None):
     series_count = 0
     
     for item in search_results:
-        if get_item_by_id(item[0])[1] == 'movie':
+        item_details = get_item_by_id(item[0])
+        if item_details and item_details[1] == 'movie':
             movies_count += 1
         else:
             series_count += 1
@@ -1108,52 +1140,35 @@ def handle_callback(call):
                 reply_markup=item_keyboard(item_id)
             )
 
-# ========== ЗАПУСК БОТА ==========
-def run_bot():
-    """Запускает Telegram бота"""
-    print("=" * 50)
-    print("🤖 Telegram бот запускается...")
-    print("=" * 50)
-    
-    if not init_db():
-        print("❌ Не удалось инициализировать базу данных")
-        return
-    
-    try:
-        bot.remove_webhook()
-        time.sleep(0.5)
-        print("✅ Старый вебхук удален")
-    except:
-        pass
-    
-    print("🔄 Запуск polling...")
-    try:
-        bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
-    except Exception as e:
-        print(f"🔴 Ошибка polling: {e}")
-        print("🔄 Перезапуск через 10 секунд...")
-        time.sleep(10)
-        run_bot()
-
-def start_flask():
-    """Запускает Flask сервер"""
-    port = int(os.environ.get('PORT', 10000))
-    print(f"🌐 Flask сервер запускается на порту {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
-
+# ========== ЗАПУСК ПРИЛОЖЕНИЯ ==========
 if __name__ == '__main__':
-    if not TOKEN:
-        print("❌❌❌ ОШИБКА: TELEGRAM_TOKEN не установлен!")
-        print("❌❌❌ Установите переменную окружения TELEGRAM_TOKEN на Render")
-        exit(1)
-    
+    print("=" * 50)
     print("🎬 КиноБот запускается...")
     print(f"🔑 Токен: {'✅ Установлен' if TOKEN else '❌ НЕТ'}")
-    print(f"🗄️  База данных: {'✅ Supabase' if DATABASE_URL else '❌ SQLite (локальная)'}")
+    print(f"🗄️  База данных: {'✅ PostgreSQL' if DATABASE_URL else '❌ SQLite (локальная)'}")
+    print(f"🌐 Вебхук URL: {'✅ Установлен' if WEBHOOK_URL else '❌ НЕ установлен'}")
+    print("=" * 50)
     
-    flask_thread = threading.Thread(target=start_flask, daemon=True)
-    flask_thread.start()
+    # Инициализируем БД при старте
+    init_db()
     
-    time.sleep(3)
+    # Получаем порт от Render
+    port = int(os.environ.get('PORT', 10000))
+    print(f"🚀 Запуск на порту: {port}")
     
-    run_bot()
+    if WEBHOOK_URL:
+        print("🔧 Режим вебхука")
+        # Установим вебхук при запуске
+        try:
+            bot.remove_webhook()
+            time.sleep(0.5)
+            bot.set_webhook(url=WEBHOOK_URL)
+            print(f"✅ Вебхук установлен: {WEBHOOK_URL}")
+        except Exception as e:
+            print(f"❌ Ошибка установки вебхука: {e}")
+    else:
+        print("⚠️ Режим polling (для разработки)")
+        print("ℹ️ На Render используйте WEBHOOK_URL для продакшена")
+    
+    # Запускаем Flask приложение
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
