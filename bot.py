@@ -7,7 +7,7 @@ import time
 import threading
 from deep_translator import GoogleTranslator
 from flask import Flask, request
-import sqlite3  # Добавьте этот импорт
+import sqlite3
 
 # ========== HTTP СЕРВЕР ДЛЯ RENDER ==========
 app = Flask(__name__)
@@ -62,10 +62,10 @@ def get_connection():
     # Для локальной разработки (без DATABASE_URL) используем SQLite
     if not DATABASE_URL or DATABASE_URL == '':
         print("⚠️ Используется локальная SQLite база")
-        import sqlite3
-        return sqlite3.connect('movies.db')
+        return sqlite3.connect('movies.db', check_same_thread=False)
     
-    print(f"🔗 Подключаемся к PostgreSQL: {DATABASE_URL[:30]}...")
+    print(f"🔗 Подключаемся к PostgreSQL...")
+    print(f"   URL: {DATABASE_URL[:50]}...")
     
     try:
         import psycopg2
@@ -93,13 +93,11 @@ def get_connection():
         
     except ImportError:
         print("❌ psycopg2 не установлен, используем SQLite")
-        import sqlite3
-        return sqlite3.connect('movies.db')
+        return sqlite3.connect('movies.db', check_same_thread=False)
     except Exception as e:
         print(f"❌ Ошибка подключения к PostgreSQL: {e}")
         print("🔄 Используем SQLite")
-        import sqlite3
-        return sqlite3.connect('movies.db')
+        return sqlite3.connect('movies.db', check_same_thread=False)
 
 def init_db():
     """Создает таблицы"""
@@ -111,7 +109,9 @@ def init_db():
     
     try:
         # Определяем тип базы данных
-        is_sqlite = isinstance(conn, sqlite3.Connection) if 'sqlite3' in globals() else False
+        is_sqlite = isinstance(conn, sqlite3.Connection)
+        
+        print(f"📊 Используем {'SQLite' if is_sqlite else 'PostgreSQL'}")
         
         if is_sqlite:
             # SQLite версия
@@ -128,8 +128,7 @@ def init_db():
                     imdb_url TEXT,
                     watched INTEGER DEFAULT 0,
                     comment TEXT,
-                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(type, title)
+                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
         else:
@@ -147,8 +146,7 @@ def init_db():
                     imdb_url TEXT,
                     watched INTEGER DEFAULT 0,
                     comment TEXT,
-                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(type, title)
+                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
         
@@ -163,49 +161,52 @@ def init_db():
 
 def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating=None, kp_url=None, imdb_url=None):
     """Добавляет фильм/сериал"""
+    print(f"➕ Добавление: {title} (тип: {item_type}, год: {year})")
+    
     conn = get_connection()
     if not conn:
+        print("❌ Нет подключения к БД")
         return None
     
     cur = conn.cursor()
     try:
-        # Определяем тип базы данных
-        is_sqlite = isinstance(conn, sqlite3.Connection) if 'sqlite3' in globals() else False
+        # Проверяем тип соединения
+        is_sqlite = isinstance(conn, sqlite3.Connection)
+        
+        print(f"📊 Используем {'SQLite' if is_sqlite else 'PostgreSQL'}")
         
         if is_sqlite:
-            # SQLite версия
+            # SQLite
             cur.execute('''
                 INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(type, title) DO NOTHING
             ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
             
-            # Получаем последний ID
+            conn.commit()
             cur.execute('SELECT last_insert_rowid()')
             result = cur.fetchone()
         else:
-            # PostgreSQL версия
+            # PostgreSQL для Supabase
+            print(f"📤 SQL запрос для PostgreSQL")
             cur.execute('''
                 INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (type, title) DO NOTHING
                 RETURNING id
             ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
             
+            conn.commit()
             result = cur.fetchone()
-        
-        conn.commit()
         
         if result:
             item_id = result[0]
-            print(f"✅ Добавлен элемент с ID: {item_id}")
+            print(f"✅ Успешно добавлено с ID: {item_id}")
             return item_id
         else:
-            print("⚠️ Элемент уже существует или не добавлен")
+            print("⚠️ Элемент не добавлен или уже существует")
             return None
             
     except Exception as e:
-        print(f"❌ Ошибка при добавлении: {e}")
+        print(f"❌ Ошибка при добавлении в БД: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -214,19 +215,39 @@ def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating
 
 def get_items(item_type):
     """Получает все фильмы/сериалы"""
+    print(f"🔍 Запрос элементов типа: {item_type}")
+    
     conn = get_connection()
     if not conn:
+        print("❌ Нет подключения к БД")
         return []
     
     cur = conn.cursor()
     try:
-        cur.execute('''
-            SELECT id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
-            FROM items WHERE type = %s ORDER BY title
-        ''', (item_type,))
-        return cur.fetchall()
+        is_sqlite = isinstance(conn, sqlite3.Connection)
+        
+        if is_sqlite:
+            cur.execute('''
+                SELECT id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                FROM items WHERE type = ? ORDER BY title
+            ''', (item_type,))
+        else:
+            cur.execute('''
+                SELECT id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                FROM items WHERE type = %s ORDER BY title
+            ''', (item_type,))
+        
+        results = cur.fetchall()
+        print(f"📊 Найдено записей: {len(results)}")
+        
+        for row in results:
+            print(f"   - ID: {row[0]}, Title: {row[1]}, Year: {row[3]}, Watched: {row[8]}")
+        
+        return results
     except Exception as e:
         print(f"❌ Ошибка при получении данных: {e}")
+        import traceback
+        traceback.print_exc()
         return []
     finally:
         conn.close()
@@ -239,10 +260,18 @@ def get_item_by_id(item_id):
     
     cur = conn.cursor()
     try:
-        cur.execute('''
-            SELECT id, type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
-            FROM items WHERE id = %s
-        ''', (item_id,))
+        is_sqlite = isinstance(conn, sqlite3.Connection)
+        
+        if is_sqlite:
+            cur.execute('''
+                SELECT id, type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                FROM items WHERE id = ?
+            ''', (item_id,))
+        else:
+            cur.execute('''
+                SELECT id, type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                FROM items WHERE id = %s
+            ''', (item_id,))
         return cur.fetchone()
     except Exception as e:
         print(f"❌ Ошибка при получении элемента: {e}")
@@ -258,13 +287,25 @@ def update_item(item_id, **kwargs):
     
     cur = conn.cursor()
     try:
-        set_clause = ", ".join([f"{key} = %s" for key in kwargs.keys()])
-        values = list(kwargs.values())
-        values.append(item_id)
+        is_sqlite = isinstance(conn, sqlite3.Connection)
         
-        cur.execute(f"UPDATE items SET {set_clause} WHERE id = %s", values)
+        if is_sqlite:
+            set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
+            values = list(kwargs.values())
+            values.append(item_id)
+            
+            cur.execute(f"UPDATE items SET {set_clause} WHERE id = ?", values)
+        else:
+            set_clause = ", ".join([f"{key} = %s" for key in kwargs.keys()])
+            values = list(kwargs.values())
+            values.append(item_id)
+            
+            cur.execute(f"UPDATE items SET {set_clause} WHERE id = %s", values)
+        
         conn.commit()
-        return cur.rowcount > 0
+        updated = cur.rowcount > 0
+        print(f"📝 Обновлено записей: {cur.rowcount}")
+        return updated
     except Exception as e:
         print(f"❌ Ошибка при обновлении: {e}")
         return False
@@ -279,9 +320,17 @@ def delete_item(item_id):
     
     cur = conn.cursor()
     try:
-        cur.execute("DELETE FROM items WHERE id = %s", (item_id,))
+        is_sqlite = isinstance(conn, sqlite3.Connection)
+        
+        if is_sqlite:
+            cur.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        else:
+            cur.execute("DELETE FROM items WHERE id = %s", (item_id,))
+        
         conn.commit()
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+        print(f"🗑 Удалено записей: {cur.rowcount}")
+        return deleted
     except Exception as e:
         print(f"❌ Ошибка при удалении: {e}")
         return False
@@ -499,6 +548,7 @@ user_states = {}
 
 @bot.message_handler(commands=['start', 'help'])
 def start(message):
+    print(f"🚀 Старт бота для пользователя {message.chat.id}")
     init_db()
     bot.send_message(message.chat.id, 
                      "🎬 *КиноБот - ваш персональный список фильмов и сериалов*\n\n"
@@ -514,6 +564,7 @@ def start(message):
 
 @bot.message_handler(func=lambda message: message.text == '🎬 Список сериалов')
 def show_series(message):
+    print(f"📺 Запрос списка сериалов от {message.chat.id}")
     items = get_items('series')
     if not items:
         text = "📭 Список сериалов пуст.\n\nДобавьте первый сериал через меню '➕ Добавить фильм или сериал'"
@@ -521,13 +572,14 @@ def show_series(message):
     else:
         bot.send_message(
             message.chat.id,
-            "📺 *Ваш список сериалов:*\n\nВыберите сериал для детального просмотра:",
+            f"📺 *Ваш список сериалов:*\n\nНайдено сериалов: {len(items)}\n\nВыберите сериал для детального просмотра:",
             parse_mode='Markdown',
             reply_markup=list_keyboard(items, "series")
         )
 
 @bot.message_handler(func=lambda message: message.text == '🎥 Список фильмов')
 def show_movies(message):
+    print(f"🎬 Запрос списка фильмов от {message.chat.id}")
     items = get_items('movie')
     if not items:
         text = "📭 Список фильмов пуст.\n\nДобавьте первый фильм через меню '➕ Добавить фильм или сериал'"
@@ -535,17 +587,19 @@ def show_movies(message):
     else:
         bot.send_message(
             message.chat.id,
-            "🎞 *Ваш список фильмов:*\n\nВыберите фильм для детального просмотра:",
+            f"🎞 *Ваш список фильмов:*\n\nНайдено фильмов: {len(items)}\n\nВыберите фильм для детального просмотра:",
             parse_mode='Markdown',
             reply_markup=list_keyboard(items, "movie")
         )
 
 @bot.message_handler(func=lambda message: message.text == '📊 Статистика')
 def show_stats(message):
+    print(f"📊 Запрос статистики от {message.chat.id}")
     bot.send_message(message.chat.id, format_stats(), parse_mode='Markdown')
 
 @bot.message_handler(func=lambda message: message.text == '➕ Добавить фильм или сериал')
 def add_item_start(message):
+    print(f"➕ Начало добавления от {message.chat.id}")
     bot.send_message(message.chat.id, "🎬 *Что вы хотите добавить?*\n\nВы можете ввести название на русском или английском языке.", 
                      parse_mode='Markdown', reply_markup=type_keyboard())
     user_states[message.chat.id] = {'state': 'choosing_type'}
@@ -578,6 +632,8 @@ def enter_title(message):
     title = message.text.strip()
     item_type = user_states[chat_id]['type']
     
+    print(f"🎬 Пользователь ввел название: '{title}' (тип: {item_type})")
+    
     if not title:
         bot.send_message(chat_id, "❌ Название не может быть пустым. Попробуйте еще раз:", 
                        reply_markup=type_keyboard())
@@ -596,6 +652,8 @@ def enter_title(message):
     
     bot.send_message(chat_id, f"🔍 *Ищу информацию о '{title}'...*", parse_mode='Markdown')
     result = search_film(title, item_type)
+    
+    print(f"🔍 Результат поиска: {result}")
     
     item_id = add_item(
         item_type=item_type,
@@ -818,14 +876,10 @@ def handle_callback(call):
             )
 
 # ========== ЗАПУСК БОТА ==========
-if __name__ == '__main__':
+def run_bot():
     print("=" * 50)
     print("🎬 КиноБот запущен!")
     print("=" * 50)
-    
-    # Запускаем Flask в отдельном потоке
-    flask_thread = threading.Thread(target=start_flask, daemon=True)
-    flask_thread.start()
     
     init_db()
     
@@ -833,9 +887,19 @@ if __name__ == '__main__':
     while True:
         try:
             print("🟢 Бот запускается...")
-            bot.polling(none_stop=True, timeout=60, skip_pending=True)
+            bot.polling(none_stop=True, timeout=60, skip_pending=True, restart_on_change=True)
         except Exception as e:
             print(f"🔴 Ошибка: {e}")
+            import traceback
+            traceback.print_exc()
             print("🔄 Перезапуск через 5 секунд...")
             time.sleep(5)
             continue
+
+if __name__ == '__main__':
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=start_flask, daemon=True)
+    flask_thread.start()
+    
+    # Запускаем бота в основном потоке
+    run_bot()
