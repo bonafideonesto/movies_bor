@@ -701,7 +701,6 @@ user_states = {}
 @bot.message_handler(commands=['start', 'help'])
 def start(message):
     print(f"🚀 Старт бота для пользователя {message.chat.id}")
-    init_db()
     bot.send_message(message.chat.id, 
                      "🎬 *КиноБот - ваш персональный список фильмов и сериалов*\n\n"
                      "Я помогу вам:\n"
@@ -1139,7 +1138,6 @@ def handle_callback(call):
                 disable_web_page_preview=True,
                 reply_markup=item_keyboard(item_id)
             )
-
 # ========== ЗАПУСК ПРИЛОЖЕНИЯ ==========
 if __name__ == '__main__':
     print("=" * 50)
@@ -1149,7 +1147,7 @@ if __name__ == '__main__':
     print(f"🌐 Вебхук URL: {'✅ Установлен' if WEBHOOK_URL else '❌ НЕ установлен'}")
     print("=" * 50)
     
-    # Инициализируем БД при старте
+    # Инициализируем БД при старте - ВАЖНО: делаем это перед всем остальным!
     init_db()
     
     # Получаем порт от Render
@@ -1172,3 +1170,4 @@ if __name__ == '__main__':
     
     # Запускаем Flask приложение
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
+
