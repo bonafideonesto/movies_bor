@@ -1,3 +1,5 @@
+[file name]: bot (3).py
+[file content begin]
 import telebot
 from telebot import types
 import os
@@ -234,6 +236,71 @@ def get_items(item_type):
     finally:
         conn.close()
 
+def search_items(search_term, search_type=None, limit=50):
+    """Ищет фильмы/сериалы по названию"""
+    conn = get_connection()
+    if not conn:
+        print("❌ Нет подключения к БД")
+        return []
+    
+    cur = conn.cursor()
+    try:
+        is_sqlite = isinstance(conn, sqlite3.Connection)
+        search_term = f"%{search_term.lower()}%"
+        
+        if search_type:
+            # Поиск в конкретном типе
+            if is_sqlite:
+                query = '''
+                    SELECT id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                    FROM items 
+                    WHERE type = ? AND (LOWER(title) LIKE ? OR LOWER(original_title) LIKE ?)
+                    ORDER BY title
+                    LIMIT ?
+                '''
+                cur.execute(query, (search_type, search_term, search_term, limit))
+            else:
+                query = '''
+                    SELECT id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                    FROM items 
+                    WHERE type = %s AND (LOWER(title) LIKE %s OR LOWER(original_title) LIKE %s)
+                    ORDER BY title
+                    LIMIT %s
+                '''
+                cur.execute(query, (search_type, search_term, search_term, limit))
+        else:
+            # Поиск по всем типам
+            if is_sqlite:
+                query = '''
+                    SELECT id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                    FROM items 
+                    WHERE LOWER(title) LIKE ? OR LOWER(original_title) LIKE ?
+                    ORDER BY type, title
+                    LIMIT ?
+                '''
+                cur.execute(query, (search_term, search_term, limit))
+            else:
+                query = '''
+                    SELECT id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                    FROM items 
+                    WHERE LOWER(title) LIKE %s OR LOWER(original_title) LIKE %s
+                    ORDER BY type, title
+                    LIMIT %s
+                '''
+                cur.execute(query, (search_term, search_term, limit))
+        
+        results = cur.fetchall()
+        print(f"🔍 Найдено результатов: {len(results)}")
+        return results
+        
+    except Exception as e:
+        print(f"❌ Ошибка при поиске: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+    finally:
+        conn.close()
+
 def get_item_by_id(item_id):
     """Получает по ID"""
     conn = get_connection()
@@ -444,8 +511,9 @@ def main_keyboard():
     btn1 = types.KeyboardButton('🎬 Список сериалов')
     btn2 = types.KeyboardButton('🎥 Список фильмов')
     btn3 = types.KeyboardButton('➕ Добавить фильм или сериал')
-    btn4 = types.KeyboardButton('📊 Статистика')
-    markup.add(btn1, btn2, btn3, btn4)
+    btn4 = types.KeyboardButton('🔍 Поиск в списке')
+    btn5 = types.KeyboardButton('📊 Статистика')
+    markup.add(btn1, btn2, btn3, btn4, btn5)
     return markup
 
 def type_keyboard():
@@ -462,6 +530,15 @@ def skip_keyboard():
     markup.add(btn1)
     return markup
 
+def search_type_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn1 = types.KeyboardButton('🎬 Поиск сериалов')
+    btn2 = types.KeyboardButton('🎥 Поиск фильмов')
+    btn3 = types.KeyboardButton('🔍 Поиск везде')
+    btn4 = types.KeyboardButton('↩️ Назад')
+    markup.add(btn1, btn2, btn3, btn4)
+    return markup
+
 def list_keyboard(items, prefix="item"):
     markup = types.InlineKeyboardMarkup(row_width=2)
     for item in items:
@@ -475,6 +552,22 @@ def list_keyboard(items, prefix="item"):
         markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"{prefix}_{item_id}"))
     return markup
 
+def search_results_keyboard(search_results):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for item in search_results:
+        item_id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment = item
+        type_icon = "🎬" if item[0] == 'series' else "🎥"
+        watched_icon = "✅" if watched else "👁"
+        btn_text = f"{type_icon}{watched_icon} {title}"
+        if year and year != 'Неизвестно':
+            btn_text += f" ({year})"
+        if len(btn_text) > 40:
+            btn_text = btn_text[:37] + "..."
+        markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"item_{item_id}"))
+    markup.add(types.InlineKeyboardButton("🔄 Новый поиск", callback_data="new_search"))
+    markup.add(types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main"))
+    return markup
+
 def item_keyboard(item_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -482,7 +575,7 @@ def item_keyboard(item_id):
         types.InlineKeyboardButton('👁 Хочу посмотреть', callback_data=f'unwatch_{item_id}'),
         types.InlineKeyboardButton('💬 Комментарий', callback_data=f'comment_{item_id}'),
         types.InlineKeyboardButton('🗑 Удалить', callback_data=f'delete_{item_id}'),
-        types.InlineKeyboardButton('↩️ Назад', callback_data='back_to_list')
+        types.InlineKeyboardButton('↩️ Назад к списку', callback_data='back_to_list')
     )
     return markup
 
@@ -529,6 +622,35 @@ def format_item_details(item):
     
     return text
 
+def format_search_results(search_results, search_term, search_type=None):
+    movies_count = 0
+    series_count = 0
+    
+    for item in search_results:
+        if get_item_by_id(item[0])[1] == 'movie':
+            movies_count += 1
+        else:
+            series_count += 1
+    
+    if search_type == 'movie':
+        type_text = "фильмов"
+    elif search_type == 'series':
+        type_text = "сериалов"
+    else:
+        type_text = "результатов"
+    
+    text = f"🔍 *Результаты поиска по запросу: '{search_term}'*\n\n"
+    text += f"📊 *Найдено {type_text}:* {len(search_results)}\n"
+    
+    if not search_type:
+        text += f"🎥 Фильмы: {movies_count}\n"
+        text += f"🎬 Сериалы: {series_count}\n"
+    
+    if len(search_results) > 10:
+        text += f"\n⚠️ Показаны первые 10 из {len(search_results)} результатов\n"
+    
+    return text
+
 def format_stats():
     all_movies = get_items('movie')
     all_series = get_items('series')
@@ -558,6 +680,7 @@ def start(message):
                      "• ✅ Отмечать 'Просмотрено' или 'Хочу посмотреть'\n"
                      "• 💬 Добавлять комментарии к фильмам\n"
                      "• 🗑 Удалять записи из списка\n"
+                     "• 🔍 Искать по вашему списку\n"
                      "• ⭐ Автоматически находить рейтинги и жанры\n\n"
                      "Выберите действие ниже:",
                      parse_mode='Markdown',
@@ -591,6 +714,101 @@ def show_movies(message):
             reply_markup=list_keyboard(items, "movie")
         )
 
+@bot.message_handler(func=lambda message: message.text == '🔍 Поиск в списке')
+def start_search(message):
+    bot.send_message(
+        message.chat.id,
+        "🔍 *Поиск в вашем списке*\n\n"
+        "Вы можете искать фильмы и сериалы по названию.\n"
+        "Поиск работает по русским и английским названиям.\n\n"
+        "Выберите область поиска:",
+        parse_mode='Markdown',
+        reply_markup=search_type_keyboard()
+    )
+    user_states[message.chat.id] = {'state': 'choosing_search_type'}
+
+@bot.message_handler(func=lambda message: message.text in ['🎬 Поиск сериалов', '🎥 Поиск фильмов', '🔍 Поиск везде'])
+def choose_search_type(message):
+    chat_id = message.chat.id
+    
+    if message.text == '🎬 Поиск сериалов':
+        search_type = 'series'
+        type_text = "сериалов"
+    elif message.text == '🎥 Поиск фильмов':
+        search_type = 'movie'
+        type_text = "фильмов"
+    else:
+        search_type = None
+        type_text = "везде"
+    
+    user_states[chat_id] = {
+        'state': 'entering_search_term',
+        'search_type': search_type
+    }
+    
+    if search_type:
+        bot.send_message(
+            chat_id,
+            f"🔍 *Поиск {type_text}*\n\nВведите название или часть названия для поиска:",
+            parse_mode='Markdown',
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+    else:
+        bot.send_message(
+            chat_id,
+            f"🔍 *Поиск во всех записях*\n\nВведите название или часть названия для поиска:",
+            parse_mode='Markdown',
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+
+@bot.message_handler(func=lambda message: message.chat.id in user_states and user_states[message.chat.id]['state'] == 'entering_search_term')
+def perform_search(message):
+    chat_id = message.chat.id
+    search_term = message.text.strip()
+    search_type = user_states[chat_id].get('search_type')
+    
+    if not search_term:
+        bot.send_message(chat_id, "❌ Поисковый запрос не может быть пустым.", 
+                       reply_markup=search_type_keyboard())
+        user_states[chat_id]['state'] = 'choosing_search_type'
+        return
+    
+    bot.send_message(chat_id, f"🔍 *Ищу '{search_term}'...*", parse_mode='Markdown')
+    
+    search_results = search_items(search_term, search_type, limit=50)
+    
+    if not search_results:
+        if search_type == 'movie':
+            text = f"🎥 *Фильмы не найдены*\n\nПо запросу '{search_term}' не найдено фильмов в вашем списке."
+        elif search_type == 'series':
+            text = f"🎬 *Сериалы не найдены*\n\nПо запросу '{search_term}' не найдено сериалов в вашем списке."
+        else:
+            text = f"📭 *Ничего не найдено*\n\nПо запросу '{search_term}' ничего не найдено в вашем списке."
+        
+        bot.send_message(
+            chat_id,
+            text,
+            parse_mode='Markdown',
+            reply_markup=main_keyboard()
+        )
+        del user_states[chat_id]
+        return
+    
+    # Сохраняем результаты поиска в состоянии пользователя
+    user_states[chat_id]['search_results'] = search_results
+    user_states[chat_id]['search_term'] = search_term
+    user_states[chat_id]['state'] = 'showing_search_results'
+    
+    # Показываем первые 10 результатов
+    results_to_show = search_results[:10]
+    
+    bot.send_message(
+        chat_id,
+        format_search_results(results_to_show, search_term, search_type),
+        parse_mode='Markdown',
+        reply_markup=search_results_keyboard(results_to_show)
+    )
+
 @bot.message_handler(func=lambda message: message.text == '📊 Статистика')
 def show_stats(message):
     bot.send_message(message.chat.id, format_stats(), parse_mode='Markdown')
@@ -617,7 +835,7 @@ def choose_type(message):
                      parse_mode='Markdown',
                      reply_markup=types.ReplyKeyboardRemove())
 
-@bot.message_handler(func=lambda message: message.text == 'Назад')
+@bot.message_handler(func=lambda message: message.text in ['Назад', '↩️ Назад'])
 def back_to_main(message):
     bot.send_message(message.chat.id, "Главное меню:", reply_markup=main_keyboard())
     if message.chat.id in user_states:
@@ -752,6 +970,16 @@ def handle_other(message):
                            "Напишите ваш комментарий или нажмите кнопку '➡️ Пропустить комментарий'",
                            parse_mode='Markdown',
                            reply_markup=skip_keyboard())
+        elif state == 'choosing_search_type':
+            bot.send_message(message.chat.id, 
+                           "🔍 *Поиск в вашем списке*\n\nВыберите область поиска:",
+                           parse_mode='Markdown',
+                           reply_markup=search_type_keyboard())
+        elif state == 'entering_search_term':
+            bot.send_message(message.chat.id, 
+                           "🔍 *Введите поисковый запрос:*\n\nНапишите название или часть названия для поиска:",
+                           parse_mode='Markdown',
+                           reply_markup=types.ReplyKeyboardRemove())
         else:
             bot.send_message(message.chat.id, "Пожалуйста, введите название фильма или сериала:", 
                            reply_markup=types.ReplyKeyboardRemove())
@@ -859,9 +1087,15 @@ def handle_callback(call):
         else:
             bot.answer_callback_query(call.id, "❌ Запись не найдена")
     
-    elif call.data == 'back_to_list':
+    elif call.data == 'back_to_list' or call.data == 'back_to_main':
         bot.delete_message(chat_id, message_id)
         bot.send_message(chat_id, "Главное меню:", reply_markup=main_keyboard())
+        if chat_id in user_states:
+            del user_states[chat_id]
+    
+    elif call.data == 'new_search':
+        bot.delete_message(chat_id, message_id)
+        start_search(call.message)
     
     elif call.data.startswith('show_'):
         item_id = int(call.data.split('_')[1])
@@ -925,3 +1159,4 @@ if __name__ == '__main__':
     time.sleep(3)
     
     run_bot()
+[file content end]
