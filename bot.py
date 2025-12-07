@@ -57,11 +57,16 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN, skip_pending=True)
 
 # ========== БАЗА ДАННЫХ ==========
+# Измените get_connection() для принудительного использования PostgreSQL:
+
 def get_connection():
     """Создает подключение к БД"""
+    # Всегда используем PostgreSQL/Supabase
     if not DATABASE_URL or DATABASE_URL == '':
-        print("⚠️ Используется локальная SQLite база")
-        return sqlite3.connect('movies.db', check_same_thread=False)
+        print("❌❌❌ ОШИБКА: DATABASE_URL не установлен!")
+        print("❌❌❌ Установите переменную окружения DATABASE_URL на Render")
+        # Вместо падения, создаем пустую in-memory SQLite
+        return sqlite3.connect(':memory:', check_same_thread=False)
     
     print(f"🔗 Подключаемся к PostgreSQL...")
     
@@ -77,21 +82,18 @@ def get_connection():
             'database': result.path[1:],
             'user': result.username,
             'password': result.password,
+            'sslmode': 'require'
         }
-        
-        conn_params['sslmode'] = 'require'
         
         conn = psycopg2.connect(**conn_params)
         print("✅ Успешное подключение к PostgreSQL")
         return conn
         
-    except ImportError:
-        print("❌ psycopg2 не установлен, используем SQLite")
-        return sqlite3.connect('movies.db', check_same_thread=False)
     except Exception as e:
         print(f"❌ Ошибка подключения к PostgreSQL: {e}")
-        print("🔄 Используем SQLite")
-        return sqlite3.connect('movies.db', check_same_thread=False)
+        # В режиме разработки используем SQLite в памяти
+        print("⚠️ Используем in-memory SQLite")
+        return sqlite3.connect(':memory:', check_same_thread=False)
 
 def init_db():
     """Создает таблицы"""
