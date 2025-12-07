@@ -4,7 +4,48 @@ import os
 import requests
 import re
 import time
+import threading
 from deep_translator import GoogleTranslator
+from flask import Flask, request
+
+# ========== HTTP СЕРВЕР ДЛЯ RENDER ==========
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🎬 КиноБот</title>
+        <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+            h1 { color: #333; }
+            p { color: #666; }
+            .status { color: green; font-weight: bold; }
+        </style>
+    </head>
+    <body>
+        <h1>🎬 КиноБот работает!</h1>
+        <p class="status">✅ Бот активен и готов к работе</p>
+        <p>Добавляйте фильмы и сериалы через Telegram</p>
+    </body>
+    </html>
+    """
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+@app.route('/ping')
+def ping():
+    return "pong", 200
+
+def start_flask():
+    """Запускает Flask сервер"""
+    port = int(os.environ.get('PORT', 10000))
+    print(f"🌐 HTTP сервер запущен на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 # ========== КОНФИГУРАЦИЯ ==========
 TOKEN = os.getenv('TELEGRAM_TOKEN', "8572008688:AAFxlCebMUSKOhzsspjJXtr1vLoP3JUsvDU")
@@ -18,12 +59,10 @@ bot = telebot.TeleBot(TOKEN, skip_pending=True)
 def get_connection():
     """Создает подключение к БД"""
     if not DATABASE_URL:
-        # Локальная разработка без Supabase
         import sqlite3
         return sqlite3.connect('movies.db')
     
     try:
-        # Пробуем подключиться к Supabase
         import psycopg2
         from urllib.parse import urlparse
         
@@ -38,12 +77,9 @@ def get_connection():
         )
         return conn
     except ImportError:
-        # psycopg2 не установлен
-        print("⚠️ psycopg2 не установлен. Используйте psycopg2-binary в requirements.txt")
         import sqlite3
         return sqlite3.connect('movies.db')
     except Exception as e:
-        print(f"⚠️ Ошибка подключения к Supabase: {e}")
         import sqlite3
         return sqlite3.connect('movies.db')
 
@@ -56,51 +92,27 @@ def init_db():
     cur = conn.cursor()
     
     try:
-        # Определяем тип БД
-        try:
-            # Пробуем PostgreSQL синтаксис
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS items (
-                    id SERIAL PRIMARY KEY,
-                    type VARCHAR(20) NOT NULL,
-                    title VARCHAR(255) NOT NULL,
-                    original_title VARCHAR(255),
-                    year VARCHAR(10),
-                    kp_rating REAL,
-                    imdb_rating REAL,
-                    kp_url TEXT,
-                    imdb_url TEXT,
-                    watched INTEGER DEFAULT 0,
-                    comment TEXT,
-                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(type, title)
-                )
-            ''')
-            print("✅ Таблица создана (PostgreSQL)")
-        except:
-            # Если не сработало, пробуем SQLite
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS items (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    original_title TEXT,
-                    year TEXT,
-                    kp_rating REAL,
-                    imdb_rating REAL,
-                    kp_url TEXT,
-                    imdb_url TEXT,
-                    watched INTEGER DEFAULT 0,
-                    comment TEXT,
-                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(type, title)
-                )
-            ''')
-            print("✅ Таблица создана (SQLite)")
-        
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS items (
+                id SERIAL PRIMARY KEY,
+                type VARCHAR(20) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                original_title VARCHAR(255),
+                year VARCHAR(10),
+                kp_rating REAL,
+                imdb_rating REAL,
+                kp_url TEXT,
+                imdb_url TEXT,
+                watched INTEGER DEFAULT 0,
+                comment TEXT,
+                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(type, title)
+            )
+        ''')
         conn.commit()
+        print("✅ База данных инициализирована")
     except Exception as e:
-        print(f"❌ Ошибка при создании таблицы: {e}")
+        print(f"❌ Ошибка БД: {e}")
     finally:
         conn.close()
 
@@ -112,28 +124,16 @@ def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating
     
     cur = conn.cursor()
     try:
-        # Пробуем PostgreSQL синтаксис
-        try:
-            cur.execute('''
-                INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (type, title) DO NOTHING
-                RETURNING id
-            ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
-            
-            result = cur.fetchone()
-            item_id = result[0] if result else None
-        except:
-            # SQLite синтаксис
-            cur.execute('''
-                INSERT OR IGNORE INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
-            
-            item_id = cur.lastrowid
+        cur.execute('''
+            INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (type, title) DO NOTHING
+            RETURNING id
+        ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
         
+        result = cur.fetchone()
         conn.commit()
-        return item_id
+        return result[0] if result else None
     except Exception as e:
         print(f"❌ Ошибка при добавлении: {e}")
         return None
@@ -148,19 +148,10 @@ def get_items(item_type):
     
     cur = conn.cursor()
     try:
-        # Пробуем PostgreSQL
-        try:
-            cur.execute('''
-                SELECT id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
-                FROM items WHERE type = %s ORDER BY title
-            ''', (item_type,))
-        except:
-            # SQLite
-            cur.execute('''
-                SELECT id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
-                FROM items WHERE type = ? ORDER BY title
-            ''', (item_type,))
-        
+        cur.execute('''
+            SELECT id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+            FROM items WHERE type = %s ORDER BY title
+        ''', (item_type,))
         return cur.fetchall()
     except Exception as e:
         print(f"❌ Ошибка при получении данных: {e}")
@@ -176,17 +167,10 @@ def get_item_by_id(item_id):
     
     cur = conn.cursor()
     try:
-        try:
-            cur.execute('''
-                SELECT id, type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
-                FROM items WHERE id = %s
-            ''', (item_id,))
-        except:
-            cur.execute('''
-                SELECT id, type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
-                FROM items WHERE id = ?
-            ''', (item_id,))
-        
+        cur.execute('''
+            SELECT id, type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+            FROM items WHERE id = %s
+        ''', (item_id,))
         return cur.fetchone()
     except Exception as e:
         print(f"❌ Ошибка при получении элемента: {e}")
@@ -202,11 +186,11 @@ def update_item(item_id, **kwargs):
     
     cur = conn.cursor()
     try:
-        set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
+        set_clause = ", ".join([f"{key} = %s" for key in kwargs.keys()])
         values = list(kwargs.values())
         values.append(item_id)
         
-        cur.execute(f"UPDATE items SET {set_clause} WHERE id = ?", values)
+        cur.execute(f"UPDATE items SET {set_clause} WHERE id = %s", values)
         conn.commit()
         return cur.rowcount > 0
     except Exception as e:
@@ -223,7 +207,7 @@ def delete_item(item_id):
     
     cur = conn.cursor()
     try:
-        cur.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        cur.execute("DELETE FROM items WHERE id = %s", (item_id,))
         conn.commit()
         return cur.rowcount > 0
     except Exception as e:
@@ -760,32 +744,16 @@ def handle_callback(call):
                 disable_web_page_preview=True,
                 reply_markup=item_keyboard(item_id)
             )
-# ========== HTTP СЕРВЕР ДЛЯ RENDER ==========
-from flask import Flask
-import threading
-
-def start_http_server():
-    """Запускает простой HTTP сервер для Render"""
-    app = Flask(__name__)
-    
-    @app.route('/')
-    def home():
-        return "🎬 КиноБот работает! Telegram: @ваш_бот"
-    
-    @app.route('/health')
-    def health():
-        return "OK", 200
-    
-    # Запускаем в отдельном потоке на порту 10000
-    import os
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 # ========== ЗАПУСК БОТА ==========
 if __name__ == '__main__':
     print("=" * 50)
     print("🎬 КиноБот запущен!")
     print("=" * 50)
+    
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=start_flask, daemon=True)
+    flask_thread.start()
     
     init_db()
     
