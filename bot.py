@@ -35,7 +35,7 @@ def home():
     """
 
 @app.route('/health')
-def health_check():  # Изменили имя функции!
+def health_check():
     return "OK", 200
 
 @app.route('/ping')
@@ -52,7 +52,6 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 if not TOKEN:
     print("❌❌❌ ВНИМАНИЕ: TELEGRAM_TOKEN не установлен!")
     print("❌❌❌ Установите переменную окружения TELEGRAM_TOKEN на Render")
-    # Без токена бот не запустится
     exit(1)
 
 bot = telebot.TeleBot(TOKEN, skip_pending=True)
@@ -60,7 +59,6 @@ bot = telebot.TeleBot(TOKEN, skip_pending=True)
 # ========== БАЗА ДАННЫХ ==========
 def get_connection():
     """Создает подключение к БД"""
-    # Для локальной разработки (без DATABASE_URL) используем SQLite
     if not DATABASE_URL or DATABASE_URL == '':
         print("⚠️ Используется локальная SQLite база")
         return sqlite3.connect('movies.db', check_same_thread=False)
@@ -69,22 +67,18 @@ def get_connection():
     
     try:
         import psycopg2
-        
-        # Парсим URL подключения
         from urllib.parse import urlparse
         
         result = urlparse(DATABASE_URL)
         
-        # Формируем параметры подключения для Supabase
         conn_params = {
             'host': result.hostname,
             'port': result.port,
-            'database': result.path[1:],  # Убираем первый символ '/'
+            'database': result.path[1:],
             'user': result.username,
             'password': result.password,
         }
         
-        # Для Render и Supabase используем sslmode='require'
         conn_params['sslmode'] = 'require'
         
         conn = psycopg2.connect(**conn_params)
@@ -109,11 +103,10 @@ def init_db():
     cur = conn.cursor()
     
     try:
-        # Определяем тип базы данных
         is_sqlite = isinstance(conn, sqlite3.Connection)
         
         if is_sqlite:
-            # SQLite версия
+            # SQLite версия с полем жанра
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +114,7 @@ def init_db():
                     title VARCHAR(255) NOT NULL,
                     original_title VARCHAR(255),
                     year VARCHAR(10),
+                    genre VARCHAR(255),
                     kp_rating REAL,
                     imdb_rating REAL,
                     kp_url TEXT,
@@ -131,7 +125,7 @@ def init_db():
                 )
             ''')
         else:
-            # PostgreSQL версия
+            # PostgreSQL версия с полем жанра
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS items (
                     id SERIAL PRIMARY KEY,
@@ -139,6 +133,7 @@ def init_db():
                     title VARCHAR(255) NOT NULL,
                     original_title VARCHAR(255),
                     year VARCHAR(10),
+                    genre VARCHAR(255),
                     kp_rating REAL,
                     imdb_rating REAL,
                     kp_url TEXT,
@@ -160,9 +155,9 @@ def init_db():
     finally:
         conn.close()
 
-def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating=None, kp_url=None, imdb_url=None):
+def add_item(item_type, title, original_title, year, genre=None, kp_rating=None, imdb_rating=None, kp_url=None, imdb_url=None):
     """Добавляет фильм/сериал"""
-    print(f"➕ Добавление: {title} (тип: {item_type}, год: {year})")
+    print(f"➕ Добавление: {title} (тип: {item_type}, год: {year}, жанр: {genre})")
     
     conn = get_connection()
     if not conn:
@@ -171,26 +166,23 @@ def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating
     
     cur = conn.cursor()
     try:
-        # Проверяем тип соединения
         is_sqlite = isinstance(conn, sqlite3.Connection)
         
         if is_sqlite:
-            # SQLite
             cur.execute('''
-                INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
+                INSERT INTO items (type, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (item_type, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url))
             
             conn.commit()
             cur.execute('SELECT last_insert_rowid()')
             result = cur.fetchone()
         else:
-            # PostgreSQL для Supabase
             cur.execute('''
-                INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO items (type, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
+            ''', (item_type, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url))
             
             conn.commit()
             result = cur.fetchone()
@@ -224,12 +216,12 @@ def get_items(item_type):
         
         if is_sqlite:
             cur.execute('''
-                SELECT id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                SELECT id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
                 FROM items WHERE type = ? ORDER BY title
             ''', (item_type,))
         else:
             cur.execute('''
-                SELECT id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                SELECT id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
                 FROM items WHERE type = %s ORDER BY title
             ''', (item_type,))
         
@@ -252,12 +244,12 @@ def get_item_by_id(item_id):
         
         if is_sqlite:
             cur.execute('''
-                SELECT id, type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                SELECT id, type, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
                 FROM items WHERE id = ?
             ''', (item_id,))
         else:
             cur.execute('''
-                SELECT id, type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
+                SELECT id, type, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment 
                 FROM items WHERE id = %s
             ''', (item_id,))
         return cur.fetchone()
@@ -345,10 +337,19 @@ def search_kinopoisk(title):
             data = response.json()
             if data.get('docs') and data['docs']:
                 film = data['docs'][0]
+                
+                # Получаем жанры
+                genres = []
+                for genre in film.get('genres', []):
+                    if genre.get('name'):
+                        genres.append(genre['name'])
+                genre_str = ', '.join(genres[:3]) if genres else None
+                
                 return {
                     'title': film.get('name', 'Неизвестно'),
                     'original_title': film.get('alternativeName', film.get('name', 'Неизвестно')),
                     'year': film.get('year', 'Неизвестно'),
+                    'genre': genre_str,
                     'kp_rating': round(film.get('rating', {}).get('kp', 0), 1) if film.get('rating', {}).get('kp') else None,
                     'imdb_rating': round(film.get('rating', {}).get('imdb', 0), 1) if film.get('rating', {}).get('imdb') else None,
                     'type': film.get('type', 'movie'),
@@ -379,10 +380,16 @@ def search_omdb(title):
                         except:
                             pass
                 
+                # Получаем жанр из OMDB
+                genre_str = data.get('Genre', None)
+                if genre_str and ',' in genre_str:
+                    genre_str = genre_str.split(',')[0]  # Берем первый жанр
+                
                 return {
                     'title': data.get('Title', search_title),
                     'original_title': data.get('Title', search_title),
                     'year': data.get('Year', 'Неизвестно'),
+                    'genre': genre_str,
                     'imdb_rating': round(imdb_rating, 1) if imdb_rating else None,
                     'kp_rating': None,
                     'type': 'movie' if data.get('Type') == 'movie' else 'series',
@@ -411,12 +418,15 @@ def search_film(title, item_type=None):
                 results['imdb_rating'] = omdb_result['imdb_rating']
             if not results.get('imdb_url') and omdb_result.get('imdb_url'):
                 results['imdb_url'] = omdb_result['imdb_url']
+            if not results.get('genre') and omdb_result.get('genre'):
+                results['genre'] = omdb_result['genre']
     
     if not results:
         results = {
             'title': title,
             'original_title': title,
             'year': 'Неизвестно',
+            'genre': None,
             'kp_rating': None,
             'imdb_rating': None,
             'type': item_type or 'movie',
@@ -453,7 +463,7 @@ def skip_keyboard():
 def list_keyboard(items, prefix="item"):
     markup = types.InlineKeyboardMarkup(row_width=2)
     for item in items:
-        item_id, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment = item
+        item_id, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment = item
         watched_icon = "✅" if watched else "👁"
         btn_text = f"{watched_icon} {title}"
         if year and year != 'Неизвестно':
@@ -476,7 +486,7 @@ def item_keyboard(item_id):
 
 # ========== ФОРМАТИРОВАНИЕ ТЕКСТА ==========
 def format_item_details(item):
-    item_id, item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment = item
+    item_id, item_type, title, original_title, year, genre, kp_rating, imdb_rating, kp_url, imdb_url, watched, comment = item
     
     type_ru = "сериал" if item_type == 'series' else "фильм"
     watched_text = "✅ Просмотрено" if watched else "👁 Хочу посмотреть"
@@ -488,6 +498,10 @@ def format_item_details(item):
         text += f"🌐 *Оригинальное название:* {original_title}\n"
     
     text += f"📅 *Год:* {year}\n"
+    
+    if genre:
+        text += f"🎭 *Жанр:* {genre}\n"
+    
     text += f"📊 *Статус:* {watched_text}\n"
     
     ratings = []
@@ -517,8 +531,8 @@ def format_stats():
     all_movies = get_items('movie')
     all_series = get_items('series')
     
-    watched_movies = sum(1 for m in all_movies if m[8])
-    watched_series = sum(1 for s in all_series if s[8])
+    watched_movies = sum(1 for m in all_movies if m[9])
+    watched_series = sum(1 for s in all_series if s[9])
     
     text = "📊 *Ваша статистика:*\n\n"
     text += f"🎥 *Фильмы:* {len(all_movies)} (просмотрено: {watched_movies})\n"
@@ -538,10 +552,11 @@ def start(message):
                      "🎬 *КиноБот - ваш персональный список фильмов и сериалов*\n\n"
                      "Я помогу вам:\n"
                      "• 📝 Вести список просмотренных фильмов и сериалов\n"
+                     "• 🎭 Добавлять информацию о жанрах\n"
                      "• ✅ Отмечать 'Просмотрено' или 'Хочу посмотреть'\n"
                      "• 💬 Добавлять комментарии к фильмам\n"
                      "• 🗑 Удалять записи из списка\n"
-                     "• ⭐ Автоматически находить рейтинги\n\n"
+                     "• ⭐ Автоматически находить рейтинги и жанры\n\n"
                      "Выберите действие ниже:",
                      parse_mode='Markdown',
                      reply_markup=main_keyboard())
@@ -596,7 +611,7 @@ def choose_type(message):
                      f"🎥 *Введите название {type_ru}а:*\n\n"
                      f"• Можно ввести на русском или английском\n"
                      f"• Например: 'Интерстеллар' или 'Inception'\n"
-                     f"• Я поищу рейтинги на Кинопоиске и IMDb",
+                     f"• Я поищу рейтинги и жанры на Кинопоиске и IMDb",
                      parse_mode='Markdown',
                      reply_markup=types.ReplyKeyboardRemove())
 
@@ -637,6 +652,7 @@ def enter_title(message):
         title=title,
         original_title=result.get('original_title', title),
         year=result['year'],
+        genre=result.get('genre'),
         kp_rating=result.get('kp_rating'),
         imdb_rating=result.get('imdb_rating'),
         kp_url=result.get('kp_url'),
@@ -648,18 +664,24 @@ def enter_title(message):
         
         found_kp = result.get('kp_rating') is not None
         found_imdb = result.get('imdb_rating') is not None
+        found_genre = result.get('genre') is not None
         
         message_text = f"✅ *'{title}' добавлен успешно!*\n\n"
         
-        if found_kp or found_imdb:
-            if found_kp:
-                message_text += f"⭐ *Кинопоиск:* {result['kp_rating']}/10\n"
-            if found_imdb:
-                message_text += f"⭐ *IMDb:* {result['imdb_rating']}/10\n"
-            message_text += f"📅 *Год:* {result['year']}\n"
-        else:
-            message_text += f"📅 *Год:* {result['year']}\n"
+        if found_genre:
+            message_text += f"🎭 *Жанр:* {result['genre']}\n"
+        
+        if found_kp:
+            message_text += f"⭐ *Кинопоиск:* {result['kp_rating']}/10\n"
+        if found_imdb:
+            message_text += f"⭐ *IMDb:* {result['imdb_rating']}/10\n"
+        
+        message_text += f"📅 *Год:* {result['year']}\n"
+        
+        if not found_kp and not found_imdb:
             message_text += "⚠️ Рейтинги не найдены\n"
+        if not found_genre:
+            message_text += "⚠️ Жанр не найден\n"
         
         bot.send_message(chat_id, message_text, parse_mode='Markdown')
         
@@ -792,7 +814,7 @@ def handle_callback(call):
         user_states[chat_id] = {'state': 'editing_comment', 'item_id': item_id}
         
         item = get_item_by_id(item_id)
-        current_comment = item[10] if item and item[10] else "нет комментария"
+        current_comment = item[11] if item and item[11] else "нет комментария"
         
         bot.delete_message(chat_id, message_id)
         bot.send_message(
@@ -859,12 +881,10 @@ def run_bot():
     print("🤖 Telegram бот запускается...")
     print("=" * 50)
     
-    # Инициализируем БД
     if not init_db():
         print("❌ Не удалось инициализировать базу данных")
         return
     
-    # Удаляем старый вебхук если был
     try:
         bot.remove_webhook()
         time.sleep(0.5)
@@ -872,7 +892,6 @@ def run_bot():
     except:
         pass
     
-    # Запускаем polling с пропуском старых сообщений
     print("🔄 Запуск polling...")
     try:
         bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
@@ -880,7 +899,7 @@ def run_bot():
         print(f"🔴 Ошибка polling: {e}")
         print("🔄 Перезапуск через 10 секунд...")
         time.sleep(10)
-        run_bot()  # Рекурсивный перезапуск
+        run_bot()
 
 def start_flask():
     """Запускает Flask сервер"""
@@ -889,7 +908,6 @@ def start_flask():
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 if __name__ == '__main__':
-    # Проверка токена
     if not TOKEN:
         print("❌❌❌ ОШИБКА: TELEGRAM_TOKEN не установлен!")
         print("❌❌❌ Установите переменную окружения TELEGRAM_TOKEN на Render")
@@ -899,12 +917,9 @@ if __name__ == '__main__':
     print(f"🔑 Токен: {'✅ Установлен' if TOKEN else '❌ НЕТ'}")
     print(f"🗄️  База данных: {'✅ Supabase' if DATABASE_URL else '❌ SQLite (локальная)'}")
     
-    # Запускаем Flask в отдельном потоке
     flask_thread = threading.Thread(target=start_flask, daemon=True)
     flask_thread.start()
     
-    # Даем Flask время на запуск
     time.sleep(3)
     
-    # Запускаем бота
     run_bot()
