@@ -1,4 +1,5 @@
 pyTelegramBotAPI==4.19.1
 requests==2.31.0
 deep-translator==1.11.4
-psycopg2-binary==2.9.9  # ← ВАЖНО: ДОЛЖЕН БЫТЬ ТОЧНО ТАК
+psycopg2-binary==2.9.9
+Flask==3.0.0  # ← ДОБАВЬТЕ ЭТУ СТРОЧКУ
