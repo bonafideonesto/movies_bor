@@ -2,6 +2,7 @@ services:
   - type: web
     name: movie-bot
     env: python
+    runtime: python-3.11  # Используем Python 3.11 вместо 3.13
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
@@ -13,7 +14,9 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
-      - key: RENDER_EXTERNAL_URL  # Добавьте эту переменную!
+      - key: RENDER_EXTERNAL_URL
         generateValue: true
+      - key: PORT
+        value: 10000
     healthCheckPath: /health
     autoDeploy: true
