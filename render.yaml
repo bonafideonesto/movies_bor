@@ -8,6 +8,8 @@ services:
       - key: TELEGRAM_TOKEN
         sync: false
       - key: OMDB_API_KEY
-        sync: false
+        sync: false  
       - key: KINOPOISK_API_KEY
+        sync: false
+      - key: DATABASE_URL  # ← ДОБАВЬТЕ ЭТО
         sync: false
