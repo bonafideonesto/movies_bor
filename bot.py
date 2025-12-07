@@ -7,6 +7,7 @@ import time
 import threading
 from deep_translator import GoogleTranslator
 from flask import Flask, request
+import sqlite3  # Добавьте этот импорт
 
 # ========== HTTP СЕРВЕР ДЛЯ RENDER ==========
 app = Flask(__name__)
@@ -58,28 +59,45 @@ bot = telebot.TeleBot(TOKEN, skip_pending=True)
 # ========== БАЗА ДАННЫХ ==========
 def get_connection():
     """Создает подключение к БД"""
-    if not DATABASE_URL:
+    # Для локальной разработки (без DATABASE_URL) используем SQLite
+    if not DATABASE_URL or DATABASE_URL == '':
+        print("⚠️ Используется локальная SQLite база")
         import sqlite3
         return sqlite3.connect('movies.db')
     
+    print(f"🔗 Подключаемся к PostgreSQL: {DATABASE_URL[:30]}...")
+    
     try:
         import psycopg2
+        
+        # Парсим URL подключения
         from urllib.parse import urlparse
         
         result = urlparse(DATABASE_URL)
-        conn = psycopg2.connect(
-            host=result.hostname,
-            port=result.port,
-            database=result.path[1:],
-            user=result.username,
-            password=result.password,
-            sslmode='require'
-        )
+        
+        # Формируем параметры подключения для Supabase
+        conn_params = {
+            'host': result.hostname,
+            'port': result.port,
+            'database': result.path[1:],  # Убираем первый символ '/'
+            'user': result.username,
+            'password': result.password,
+        }
+        
+        # Для Render и Supabase используем sslmode='require'
+        conn_params['sslmode'] = 'require'
+        
+        conn = psycopg2.connect(**conn_params)
+        print("✅ Успешное подключение к PostgreSQL")
         return conn
+        
     except ImportError:
+        print("❌ psycopg2 не установлен, используем SQLite")
         import sqlite3
         return sqlite3.connect('movies.db')
     except Exception as e:
+        print(f"❌ Ошибка подключения к PostgreSQL: {e}")
+        print("🔄 Используем SQLite")
         import sqlite3
         return sqlite3.connect('movies.db')
 
@@ -92,27 +110,54 @@ def init_db():
     cur = conn.cursor()
     
     try:
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS items (
-                id SERIAL PRIMARY KEY,
-                type VARCHAR(20) NOT NULL,
-                title VARCHAR(255) NOT NULL,
-                original_title VARCHAR(255),
-                year VARCHAR(10),
-                kp_rating REAL,
-                imdb_rating REAL,
-                kp_url TEXT,
-                imdb_url TEXT,
-                watched INTEGER DEFAULT 0,
-                comment TEXT,
-                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(type, title)
-            )
-        ''')
+        # Определяем тип базы данных
+        is_sqlite = isinstance(conn, sqlite3.Connection) if 'sqlite3' in globals() else False
+        
+        if is_sqlite:
+            # SQLite версия
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type VARCHAR(20) NOT NULL,
+                    title VARCHAR(255) NOT NULL,
+                    original_title VARCHAR(255),
+                    year VARCHAR(10),
+                    kp_rating REAL,
+                    imdb_rating REAL,
+                    kp_url TEXT,
+                    imdb_url TEXT,
+                    watched INTEGER DEFAULT 0,
+                    comment TEXT,
+                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(type, title)
+                )
+            ''')
+        else:
+            # PostgreSQL версия
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS items (
+                    id SERIAL PRIMARY KEY,
+                    type VARCHAR(20) NOT NULL,
+                    title VARCHAR(255) NOT NULL,
+                    original_title VARCHAR(255),
+                    year VARCHAR(10),
+                    kp_rating REAL,
+                    imdb_rating REAL,
+                    kp_url TEXT,
+                    imdb_url TEXT,
+                    watched INTEGER DEFAULT 0,
+                    comment TEXT,
+                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(type, title)
+                )
+            ''')
+        
         conn.commit()
         print("✅ База данных инициализирована")
     except Exception as e:
         print(f"❌ Ошибка БД: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         conn.close()
 
@@ -124,18 +169,45 @@ def add_item(item_type, title, original_title, year, kp_rating=None, imdb_rating
     
     cur = conn.cursor()
     try:
-        cur.execute('''
-            INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (type, title) DO NOTHING
-            RETURNING id
-        ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
+        # Определяем тип базы данных
+        is_sqlite = isinstance(conn, sqlite3.Connection) if 'sqlite3' in globals() else False
         
-        result = cur.fetchone()
+        if is_sqlite:
+            # SQLite версия
+            cur.execute('''
+                INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(type, title) DO NOTHING
+            ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
+            
+            # Получаем последний ID
+            cur.execute('SELECT last_insert_rowid()')
+            result = cur.fetchone()
+        else:
+            # PostgreSQL версия
+            cur.execute('''
+                INSERT INTO items (type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (type, title) DO NOTHING
+                RETURNING id
+            ''', (item_type, title, original_title, year, kp_rating, imdb_rating, kp_url, imdb_url))
+            
+            result = cur.fetchone()
+        
         conn.commit()
-        return result[0] if result else None
+        
+        if result:
+            item_id = result[0]
+            print(f"✅ Добавлен элемент с ID: {item_id}")
+            return item_id
+        else:
+            print("⚠️ Элемент уже существует или не добавлен")
+            return None
+            
     except Exception as e:
         print(f"❌ Ошибка при добавлении: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     finally:
         conn.close()
